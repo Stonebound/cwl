@@ -7,11 +7,14 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.stream.JsonReader;
 import com.google.inject.Inject;
+import ninja.leaping.configurate.ConfigurationNode;
 import ninja.leaping.configurate.commented.CommentedConfigurationNode;
 import ninja.leaping.configurate.loader.ConfigurationLoader;
+import ninja.leaping.configurate.yaml.YAMLConfigurationLoader;
 import org.slf4j.Logger;
 import org.spongepowered.api.Sponge;
 import org.spongepowered.api.command.spec.CommandSpec;
+import org.spongepowered.api.config.ConfigDir;
 import org.spongepowered.api.config.DefaultConfig;
 import org.spongepowered.api.entity.living.player.User;
 import org.spongepowered.api.event.Listener;
@@ -35,6 +38,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -49,7 +53,7 @@ import javax.annotation.Nullable;
 import javax.sql.DataSource;
 
 @Plugin(id = "cwl", name = "Custom Whitelist", authors = "mrAppleXZ", description = "Customize your whitelist message & generate the whitelist!",
-        version = "1.3.1")
+        version = "1.3.2")
 public class CWL {
     public static CWL INSTANCE;
     private CommentedConfigurationNode config = null;
@@ -61,6 +65,14 @@ public class CWL {
     private ConfigurationLoader<CommentedConfigurationNode> getConfigManager() {
         return this.configManager;
     }
+
+    @Inject
+    @ConfigDir(sharedRoot = false)
+    private File configDir;
+
+
+
+
 
     @Inject
     @DefaultConfig(sharedRoot = true)
@@ -106,17 +118,18 @@ public class CWL {
                 getDefaultConfig().createNewFile();
                 this.config = getConfigManager().load();
 
-                config = configManager.load();
                 this.config.getNode("main", "whitelist_msg").setValue("Send a whitelist request firstly!").setComment("Message displayed to not whitelisted users");
-                this.config.getNode("main", "sync_delay").setValue(120);
+                this.config.getNode("main", "sync_delay").setValue(120).setComment("Time in seconds between automatic whitelist sync");
                 this.config.getNode("main", "mode").setValue("none").setComment("Modes: db, json, none, closed");
-                this.config.getNode("main", "bypass").setValue("").setComment("Comma separated list of users that can join when closed.");
+                this.config.getNode("main", "logging").setValue(false).setComment("Log successful syncs to console?");
+                this.config.getNode("main", "bypass").setValue("069a79f4-44e9-4726-a5be-fca90e38aaf5,61699b2e-d327-4a01-9f1e-0ea8c3f06bc6")
+                        .setComment("Comma separated list of users that can join when closed.");
 
                 //dbConnection = Sponge.getServiceManager().provide(SqlService.class).get().getDataSource(this.config.getNode("db", "db_connection").getString());
-                this.config.getNode("db", "db_connection").setValue("");
+                this.config.getNode("db", "db_connection").setValue("jdbc:mysql://localhost/lc?user=YOUR_USERNAME&password=YOUR_PASSWORD");
                 this.config.getNode("db", "db_query").setValue("SELECT `username`, `uuid` from `players` WHERE `access` = 2;");
 
-                this.config.getNode("json", "json_url").setValue("http://www.example.com/docs/resource1.html").setComment("e.g. https://example.com/whitelist.json");
+                this.config.getNode("json", "json_url").setValue("https://example.com/whitelist.json").setComment("Link to a vanilla whitelist.json");
 
                 getConfigManager().save(this.config);
             }
@@ -131,7 +144,6 @@ public class CWL {
             if (getDbConnection() == null) {
                 getLog().error("Can't sync the whitelist! Recheck the database settings and run /cwl reload!");
             }
-            getLog().info("Syncing whitelist...");
             WhitelistService wh = Sponge.getServiceManager().provide(WhitelistService.class).get();
             wh.getWhitelistedProfiles().stream().forEach(gameProfile -> wh.removeProfile(gameProfile));
             try (Connection conn = getDbConnection().getConnection()) {
@@ -146,7 +158,8 @@ public class CWL {
                     }
                 }
             }
-            getLog().info("The whitelist was successfully synced!");
+            if (this.config.getNode("main", "logging").getBoolean())
+                getLog().info("The whitelist was successfully synced!");
         } else if (getMode().equals("closed")) {
             WhitelistService wh = Sponge.getServiceManager().provide(WhitelistService.class).get();
             wh.getWhitelistedProfiles().stream().forEach(gameProfile -> wh.removeProfile(gameProfile));
@@ -188,7 +201,8 @@ public class CWL {
                                 uuid.replaceFirst("(\\p{XDigit}{8})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}+)",
                                         "$1-$2-$3-$4-$5")), name));
                     }
-                    getLog().info("The whitelist was successfully synced!");
+                    if (this.config.getNode("main", "logging").getBoolean())
+                        getLog().info("The whitelist was successfully synced!");
                 } catch (Exception ex) {
                     getLog().error("sync", ex);
                 }
