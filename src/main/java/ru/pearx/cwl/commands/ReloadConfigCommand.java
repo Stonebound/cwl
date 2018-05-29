@@ -31,7 +31,7 @@ public class ReloadConfigCommand implements CommandExecutor
         {
             cwl.reload();
         }
-        catch (IOException | SQLException | UncheckedExecutionException e)
+        catch (UncheckedExecutionException e)
         {
             throw new CommandException(Text.of("An exception occurred while reloading the CWL plugin!"), e);
         }

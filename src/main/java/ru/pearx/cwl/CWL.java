@@ -7,10 +7,9 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.stream.JsonReader;
 import com.google.inject.Inject;
-import ninja.leaping.configurate.ConfigurationNode;
 import ninja.leaping.configurate.commented.CommentedConfigurationNode;
 import ninja.leaping.configurate.loader.ConfigurationLoader;
-import ninja.leaping.configurate.yaml.YAMLConfigurationLoader;
+import org.apache.commons.collections4.CollectionUtils;
 import org.slf4j.Logger;
 import org.spongepowered.api.Sponge;
 import org.spongepowered.api.command.spec.CommandSpec;
@@ -19,7 +18,6 @@ import org.spongepowered.api.config.DefaultConfig;
 import org.spongepowered.api.entity.living.player.User;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.Order;
-import org.spongepowered.api.event.filter.Getter;
 import org.spongepowered.api.event.game.state.GamePreInitializationEvent;
 import org.spongepowered.api.event.game.state.GameStartedServerEvent;
 import org.spongepowered.api.event.network.ClientConnectionEvent;
@@ -38,12 +36,13 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -53,7 +52,7 @@ import javax.annotation.Nullable;
 import javax.sql.DataSource;
 
 @Plugin(id = "cwl", name = "Custom Whitelist", authors = "mrAppleXZ", description = "Customize your whitelist message & generate the whitelist!",
-        version = "1.3.2")
+        version = "1.4.0")
 public class CWL {
     public static CWL INSTANCE;
     private CommentedConfigurationNode config = null;
@@ -69,10 +68,6 @@ public class CWL {
     @Inject
     @ConfigDir(sharedRoot = false)
     private File configDir;
-
-
-
-
 
     @Inject
     @DefaultConfig(sharedRoot = true)
@@ -144,27 +139,22 @@ public class CWL {
             if (getDbConnection() == null) {
                 getLog().error("Can't sync the whitelist! Recheck the database settings and run /cwl reload!");
             }
-            WhitelistService wh = Sponge.getServiceManager().provide(WhitelistService.class).get();
-            wh.getWhitelistedProfiles().stream().forEach(gameProfile -> wh.removeProfile(gameProfile));
+            Collection<GameProfile> dbList = new ArrayList<>();
             try (Connection conn = getDbConnection().getConnection()) {
                 try (PreparedStatement st = conn.prepareStatement(getDbQuery())) {
                     ResultSet res = st.executeQuery();
                     while (res.next()) {
                         String name = res.getString(1);
                         String uuid = res.getString(2);
-                        wh.addProfile(GameProfile.of(UUID.fromString(
+                        dbList.add(GameProfile.of(UUID.fromString(
                                 uuid.replaceFirst("(\\p{XDigit}{8})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}+)",
                                         "$1-$2-$3-$4-$5")), name));
                     }
                 }
             }
-            if (this.config.getNode("main", "logging").getBoolean())
-                getLog().info("The whitelist was successfully synced!");
+            modifyWlSync(dbList);
         } else if (getMode().equals("closed")) {
-            WhitelistService wh = Sponge.getServiceManager().provide(WhitelistService.class).get();
-            wh.getWhitelistedProfiles().stream().forEach(gameProfile -> wh.removeProfile(gameProfile));
-            // wh.addProfile(GameProfile.of(UUID.fromString("069a79f4-44e9-4726-a5be-fca90e38aaf5"), "notch"));
-            // getLog().error("whitelist:" + Arrays.toString(wh.getWhitelistedProfiles().toArray()));
+            Collection<GameProfile> bypasserList = new ArrayList<>();
             List<String> bypassList = Arrays.asList(this.config.getNode("main", "bypass").getString().split(","));
             if (!bypassList.isEmpty()) {
                 for (String bypasser : bypassList) {
@@ -172,18 +162,21 @@ public class CWL {
                     if (optStorage.isPresent() && !bypasser.equals("")){
                         Optional<User> usr = optStorage.get().get(UUID.fromString(bypasser));
                         if (usr.isPresent()) {
-                            wh.addProfile(GameProfile.of(UUID.fromString(bypasser), usr.get().getName()));
+                            bypasserList.add(GameProfile.of(UUID.fromString(bypasser), usr.get().getName()));
                         } else {
-                            wh.addProfile(GameProfile.of(UUID.fromString(bypasser), "bypasser"));
+                            bypasserList.add(GameProfile.of(UUID.fromString(bypasser), "bypasser"));
                         }
                     }
                 }
             }
+            modifyWlSync(bypasserList);
             if (syncTask != null) {
                 syncTask.cancel();
             }
             getLog().info("Whitelist closed!");
         } else if (getMode().equals("json")) {
+            Collection<GameProfile> jsonlist = new ArrayList<>();
+            // get whitelist from remote url
             try {
                 URL url = new URL(this.config.getNode("json", "json_url").getString());
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -191,18 +184,15 @@ public class CWL {
                     JsonReader reader = new JsonReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
                     JsonParser parser = new JsonParser();
                     JsonArray userArray = parser.parse(reader).getAsJsonArray();
-                    WhitelistService wh = Sponge.getServiceManager().provide(WhitelistService.class).get();
-                    wh.getWhitelistedProfiles().stream().forEach(gameProfile -> wh.removeProfile(gameProfile));
                     for (JsonElement user : userArray) {
                         JsonObject userObj = user.getAsJsonObject();
                         String name = userObj.get("name").getAsString();
                         String uuid = userObj.get("uuid").getAsString();
-                        wh.addProfile(GameProfile.of(UUID.fromString(
+                        jsonlist.add(GameProfile.of(UUID.fromString(
                                 uuid.replaceFirst("(\\p{XDigit}{8})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}+)",
                                         "$1-$2-$3-$4-$5")), name));
                     }
-                    if (this.config.getNode("main", "logging").getBoolean())
-                        getLog().info("The whitelist was successfully synced!");
+                    modifyWlSync(jsonlist);
                 } catch (Exception ex) {
                     getLog().error("sync", ex);
                 }
@@ -230,7 +220,23 @@ public class CWL {
         }
     }
 
-    public void reload() throws IOException, SQLException {
+    private void modifyWlSync(Collection<GameProfile> newList) {
+        Task.builder().execute(() -> {
+            WhitelistService wh = Sponge.getServiceManager().provide(WhitelistService.class).get();
+            Collection<GameProfile> currentlist = wh.getWhitelistedProfiles();
+
+            Collection<GameProfile> toremove = CollectionUtils.subtract(currentlist, newList);
+            Collection<GameProfile> toadd = CollectionUtils.subtract(newList, currentlist);
+
+            toremove.forEach(gameProfile -> wh.removeProfile(gameProfile));
+            toadd.forEach(gameProfile -> wh.addProfile(gameProfile));
+
+            if (this.config.getNode("main", "logging").getBoolean())
+                getLog().info("The whitelist was successfully synced!");
+        }).submit(this);
+    }
+
+    public void reload() {
         reloadConfig();
         reloadTask();
     }
@@ -253,7 +259,7 @@ public class CWL {
                 ).build(), "cwl");
         try {
             reload();
-        } catch (SQLException | UncheckedExecutionException e1) {
+        } catch (UncheckedExecutionException e1) {
             getLog().error("An exception occurred while setting up the CWL plugin! Recheck the database settings and run /cwl reload!");
         }
     }
